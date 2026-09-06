@@ -53,6 +53,16 @@ from services.schedule_config import (
 st.set_page_config(page_title="Threads 마케팅 파이프라인 대시보드", layout="wide")
 
 
+def is_streamlit_cloud() -> bool:
+    """Streamlit Community Cloud에는 GUI 브라우저가 없어 Threads 로그인을 할 수 없다."""
+    if os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("STREAMLIT_CLOUD"):
+        return True
+    if os.environ.get("USER") == "appuser":
+        return True
+    hostname = (os.environ.get("HOSTNAME") or "").lower()
+    return hostname.startswith("streamlit") or "streamlit" in hostname
+
+
 def current_phase(diff_days: int) -> str:
     if diff_days > 21:
         return "W-4: 고객 문제 정의 & 공감대 형성 (Awareness)"
@@ -175,8 +185,27 @@ def _set_session_user(user: User) -> None:
 
 @st.dialog("Threads 계정은 이렇게 연결해요", width="large")
 def _threads_guide_dialog() -> None:
-    st.markdown(
-        """
+    if is_streamlit_cloud():
+        st.markdown(
+            """
+Streamlit Cloud에는 Chrome/Edge 창을 띄울 수 없습니다.  
+**Threads 계정 연결·실제 발행**은 본인 PC에서 해야 합니다.
+
+### PC에서 연결하는 방법
+
+1. 이 프로젝트 폴더에서 대시보드를 켭니다.  
+   `streamlit run app.py`
+2. 같은 PC에서 예약/승인 워커도 켭니다.  
+   `python main.py schedule`
+3. 로컬 대시보드에서 **브라우저로 Threads 로그인**을 누릅니다.
+4. 열린 Chrome/Edge에서 Threads에 로그인하면 연결이 끝납니다.
+
+Streamlit Cloud에서는 **초안 만들기·문서 수정·스케줄 설정**만 쓰면 됩니다.
+"""
+        )
+    else:
+        st.markdown(
+            """
 파일을 올리거나 저장 위치를 찾을 필요는 없습니다.  
 **브라우저에서 Threads에 로그인**하면 이 대시보드가 연결을 기억합니다.
 
@@ -198,7 +227,7 @@ def _threads_guide_dialog() -> None:
 - 창이 안 뜨면 이 컴퓨터에 Chrome 또는 Edge가 설치돼 있는지 확인하세요.
 - 나중에 연결이 풀리면 같은 버튼을 다시 누르면 됩니다. 파일을 옮길 필요는 없습니다.
 """
-    )
+        )
     if st.button("닫기", type="primary", use_container_width=True):
         st.rerun()
 
@@ -440,29 +469,43 @@ with guide_col:
 st.caption("대시보드 로그인과 별개입니다. 글을 올릴 Threads 계정을 브라우저에서 연결합니다.")
 threads_session = user_session_file(current_user.username)
 threads_ok = threads_session.is_file() and threads_session.stat().st_size > 20
-if threads_ok:
+cloud_host = is_streamlit_cloud()
+
+if cloud_host:
+    st.info(
+        "지금 화면은 Streamlit Cloud입니다. 여기에는 Chrome/Edge가 없어서 "
+        "**브라우저로 Threads 로그인을 할 수 없습니다.** "
+        "초안 생성·문서·스케줄 설정은 클라우드에서, Threads 연결·실제 발행은 "
+        "PC에서 `streamlit run app.py`와 `python main.py schedule`로 하세요."
+    )
+    if threads_ok:
+        st.success("이 서버에 저장된 Threads 세션이 있습니다. (클라우드에서는 발행에 쓰지 않는 것을 권장)")
+    else:
+        st.warning("클라우드에서는 Threads 계정을 새로 연결할 수 없습니다. PC 로컬 대시보드를 이용하세요.")
+elif threads_ok:
     st.success("Threads 계정이 연결되어 있습니다.")
 else:
     st.warning("아직 Threads 계정이 연결되어 있지 않습니다. 아래 버튼으로 브라우저 로그인을 하세요.")
 
-login_label = "다시 로그인하기" if threads_ok else "브라우저로 Threads 로그인"
-if st.button(login_label, use_container_width=True, type="primary"):
-    from importlib import reload as reload_module
-    import save_session as save_session_mod
+if not cloud_host:
+    login_label = "다시 로그인하기" if threads_ok else "브라우저로 Threads 로그인"
+    if st.button(login_label, use_container_width=True, type="primary"):
+        from importlib import reload as reload_module
+        import save_session as save_session_mod
 
-    reload_module(save_session_mod)
-    try:
-        with st.spinner(
-            "브라우저가 열립니다. Threads에 로그인하세요. 창을 닫으면 바로 취소됩니다..."
-        ):
-            save_session_mod.save_threads_session(threads_session, wait_enter=False)
-        st.success("Threads 계정을 연결했습니다.")
-        st.rerun()
-    except save_session_mod.LoginCancelled as exc:
-        st.warning(str(exc))
-    except Exception as exc:
-        st.error(f"브라우저 로그인에 실패했습니다: {exc}")
-        st.info("창이 안 뜨면 Chrome 또는 Edge가 설치돼 있는지 확인한 뒤 **연결 방법 보기**를 눌러 주세요.")
+        reload_module(save_session_mod)
+        try:
+            with st.spinner(
+                "브라우저가 열립니다. Threads에 로그인하세요. 창을 닫으면 바로 취소됩니다..."
+            ):
+                save_session_mod.save_threads_session(threads_session, wait_enter=False)
+            st.success("Threads 계정을 연결했습니다.")
+            st.rerun()
+        except save_session_mod.LoginCancelled as exc:
+            st.warning(str(exc))
+        except Exception as exc:
+            st.error(f"브라우저 로그인에 실패했습니다: {exc}")
+            st.info("창이 안 뜨면 Chrome 또는 Edge가 설치돼 있는지 확인한 뒤 **연결 방법 보기**를 눌러 주세요.")
 
 st.divider()
 st.subheader("✍️ 스레드 초안 실시간 생성 & 프리뷰")
