@@ -1,0 +1,22 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# secrets & runtime data
+database/history.db
+database/*.db
+session/threads_session.json
+threads_session.json
+logs/
+state/
+*.png
+
+.streamlit/secrets.toml
+.vscode/
+.DS_Store
+Thumbs.db
