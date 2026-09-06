@@ -92,6 +92,10 @@ def user_session_file(username: str) -> Path:
     return user_dir(username) / "threads_session.json"
 
 
+def user_threads_api_file(username: str) -> Path:
+    return user_dir(username) / "threads_api.json"
+
+
 def ensure_member_docs(username: str) -> Path:
     directory = user_docs_dir(username)
     for name in ("service.md", "pain_points.md"):

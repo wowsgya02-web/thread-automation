@@ -282,7 +282,7 @@ async def _handle_approve(query, context: ContextTypes.DEFAULT_TYPE, record: Pos
         await _safe_edit(
             query,
             context,
-            f"❌ 발행 실패\n{detail}{extra}\n\n세션 만료라면 `python main.py login`을 다시 실행하세요.",
+            f"발행 실패\n{detail}{extra}\n\n토큰이 만료됐다면 대시보드에서 Threads API 토큰을 다시 연결하세요.",
         )
     _finish_review()
 

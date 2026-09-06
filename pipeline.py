@@ -94,7 +94,11 @@ async def generate_and_auto_publish(bot=None, username: str = "") -> int:
     logger.info("자동 발행 시작 (post_id=%s topic=%s user=%s)", post_id, draft.topic, username or "-")
 
     result = await asyncio.to_thread(
-        publish_thread, draft.content, config.SERVICE_URL, session_path
+        publish_thread,
+        draft.content,
+        config.SERVICE_URL,
+        session_path,
+        username,
     )
     if result.success:
         db.mark_posted(post_id)
@@ -116,7 +120,7 @@ async def generate_and_auto_publish(bot=None, username: str = "") -> int:
             "스케줄 자동 발행에 실패했습니다.",
             f"주제: {draft.topic}",
             detail + extra,
-            "세션이 만료됐다면 대시보드에서 Threads 로그인을 다시 하세요.",
+            "토큰이 만료됐다면 대시보드에서 Threads API 토큰을 다시 연결하세요.",
         ]
         logger.error("자동 발행 실패 (post_id=%s): %s", post_id, detail)
 

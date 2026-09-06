@@ -178,6 +178,7 @@ You receive strategy and a STORED pain inventory as the source of truth.
 
 공통:
 - 3~5줄. 줄바꿈. 본문 URL·가입 CTA·'링크는 댓글에' 금지.
+- 본문 총 길이는 500자 이하 (Threads API 한도).
 - 해시태그 없거나 1개. AI 티 내지 말 것.
 """.strip()
 
@@ -252,6 +253,8 @@ def _validate(
         return "본문이 3줄 미만입니다."
     if line_count > 8:
         return "본문이 너무 깁니다."
+    if len(draft.content) > 500:
+        return "본문이 Threads API 한도(500자)를 넘습니다."
     if URL_PATTERN.search(draft.content):
         return "본문에 링크성 텍스트가 포함되어 있습니다."
 

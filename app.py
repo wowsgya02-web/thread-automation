@@ -28,12 +28,18 @@ from services.auth import (
     save_launch_date,
     user_docs_dir,
     user_schedule_file,
-    user_session_file,
     verify_user,
 )
 from services.content_generator import generate_post, rewrite_for_threads
 from database.db_manager import get_db
 from services.telegram_reviewer import send_for_review_sync, telegram_configured
+from services.threads_api import (
+    credentials_ok,
+    load_credentials,
+    save_credentials,
+    verify_token,
+    clear_credentials,
+)
 from services.doc_analyzer import (
     analyze_or_fallback,
     clear_analysis_cache,
@@ -51,16 +57,6 @@ from services.schedule_config import (
 )
 
 st.set_page_config(page_title="Threads 마케팅 파이프라인 대시보드", layout="wide")
-
-
-def is_streamlit_cloud() -> bool:
-    """Streamlit Community Cloud에는 GUI 브라우저가 없어 Threads 로그인을 할 수 없다."""
-    if os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get("STREAMLIT_CLOUD"):
-        return True
-    if os.environ.get("USER") == "appuser":
-        return True
-    hostname = (os.environ.get("HOSTNAME") or "").lower()
-    return hostname.startswith("streamlit") or "streamlit" in hostname
 
 
 def current_phase(diff_days: int) -> str:
@@ -183,51 +179,35 @@ def _set_session_user(user: User) -> None:
     migrate_legacy_files(user.username)
 
 
-@st.dialog("Threads 계정은 이렇게 연결해요", width="large")
+@st.dialog("Threads API는 이렇게 연결해요", width="large")
 def _threads_guide_dialog() -> None:
-    if is_streamlit_cloud():
-        st.markdown(
-            """
-Streamlit Cloud에는 Chrome/Edge 창을 띄울 수 없습니다.  
-**Threads 계정 연결·실제 발행**은 본인 PC에서 해야 합니다.
-
-### PC에서 연결하는 방법
-
-1. 이 프로젝트 폴더에서 대시보드를 켭니다.  
-   `streamlit run app.py`
-2. 같은 PC에서 예약/승인 워커도 켭니다.  
-   `python main.py schedule`
-3. 로컬 대시보드에서 **브라우저로 Threads 로그인**을 누릅니다.
-4. 열린 Chrome/Edge에서 Threads에 로그인하면 연결이 끝납니다.
-
-Streamlit Cloud에서는 **초안 만들기·문서 수정·스케줄 설정**만 쓰면 됩니다.
-"""
-        )
-    else:
-        st.markdown(
-            """
-파일을 올리거나 저장 위치를 찾을 필요는 없습니다.  
-**브라우저에서 Threads에 로그인**하면 이 대시보드가 연결을 기억합니다.
+    st.markdown(
+        """
+브라우저 로그인 대신 **Meta Threads API 토큰**으로 연결합니다.  
+Streamlit Cloud에서도 로컬 PC 없이 발행할 수 있습니다.
 
 ---
 
-### 순서
+### 준비 (처음 한 번)
 
-1. **브라우저로 Threads 로그인** 버튼을 누릅니다.
-2. 잠시 후 **Chrome 또는 Edge 창**이 열리고, Threads 로그인 페이지가 나옵니다.
-3. 평소처럼 아이디·비밀번호(또는 Instagram 로그인)로 Threads에 들어갑니다.
-4. **홈 피드(글이 보이는 화면)** 까지 가면 잠시 기다립니다.
-5. 이 대시보드에 **Threads 계정이 연결되어 있습니다** 라고 나오면 끝난 것입니다.
+1. [Meta for Developers](https://developers.facebook.com/apps/)에서 앱을 만듭니다.
+2. 앱에 **Threads API** 사용 사례를 추가합니다.
+3. 권한: `threads_basic`, `threads_content_publish`  
+   (첫 댓글 링크까지 쓰려면 `threads_manage_replies`도)
+4. Threads 테스트 사용자/본인 계정으로 로그인 토큰을 발급받습니다.
+5. **장기 토큰(Long-lived)** 으로 바꿔 두는 것을 권장합니다.
 
 ---
 
-### 알아두면 좋은 것
+### 대시보드에서
 
-- 이 로그인은 **대시보드 아이디/비밀번호와 다릅니다.** 글을 올릴 Threads 계정입니다.
-- 창이 안 뜨면 이 컴퓨터에 Chrome 또는 Edge가 설치돼 있는지 확인하세요.
-- 나중에 연결이 풀리면 같은 버튼을 다시 누르면 됩니다. 파일을 옮길 필요는 없습니다.
+1. Access Token을 붙여 넣고 **토큰 확인 & 저장**을 누릅니다.
+2. 사용자 ID는 토큰 확인 시 자동으로 채워집니다.
+3. **Threads API가 연결되었습니다**가 나오면 끝입니다.
+
+토큰은 비밀번호처럼 다루세요. 다른 사람에게 공유하면 안 됩니다.
 """
-        )
+    )
     if st.button("닫기", type="primary", use_container_width=True):
         st.rerun()
 
@@ -466,50 +446,63 @@ with guide_col:
     if st.button("연결 방법 보기", use_container_width=True):
         _threads_guide_dialog()
 
-st.caption("대시보드 로그인과 별개입니다. 글을 올릴 Threads 계정을 브라우저에서 연결합니다.")
-threads_session = user_session_file(current_user.username)
-threads_ok = threads_session.is_file() and threads_session.stat().st_size > 20
-cloud_host = is_streamlit_cloud()
+st.caption(
+    "대시보드 로그인과 별개입니다. Meta Threads API 토큰으로 연결합니다. "
+    "브라우저/로컬 PC가 필요 없습니다."
+)
 
-if cloud_host:
-    st.info(
-        "지금 화면은 Streamlit Cloud입니다. 여기에는 Chrome/Edge가 없어서 "
-        "**브라우저로 Threads 로그인을 할 수 없습니다.** "
-        "초안 생성·문서·스케줄 설정은 클라우드에서, Threads 연결·실제 발행은 "
-        "PC에서 `streamlit run app.py`와 `python main.py schedule`로 하세요."
-    )
-    if threads_ok:
-        st.success("이 서버에 저장된 Threads 세션이 있습니다. (클라우드에서는 발행에 쓰지 않는 것을 권장)")
-    else:
-        st.warning("클라우드에서는 Threads 계정을 새로 연결할 수 없습니다. PC 로컬 대시보드를 이용하세요.")
-elif threads_ok:
-    st.success("Threads 계정이 연결되어 있습니다.")
+threads_ok = credentials_ok(current_user.username)
+saved_creds = load_credentials(current_user.username)
+if threads_ok:
+    handle = saved_creds.get("threads_username") or saved_creds.get("user_id")
+    st.success(f"Threads API가 연결되어 있습니다. (@{handle})" if handle else "Threads API가 연결되어 있습니다.")
 else:
-    st.warning("아직 Threads 계정이 연결되어 있지 않습니다. 아래 버튼으로 브라우저 로그인을 하세요.")
+    st.warning("아직 Threads API 토큰이 없습니다. 아래에서 Access Token을 연결하세요.")
 
-if not cloud_host:
-    login_label = "다시 로그인하기" if threads_ok else "브라우저로 Threads 로그인"
-    if st.button(login_label, use_container_width=True, type="primary"):
-        from importlib import reload as reload_module
-        import save_session as save_session_mod
+st.caption(
+    "Streamlit Cloud는 재배포 시 파일이 초기화될 수 있습니다. "
+    "안정적으로 쓰려면 App settings → Secrets에 "
+    "`THREADS_ACCESS_TOKEN`, `THREADS_USER_ID`도 넣어 주세요."
+)
 
-        reload_module(save_session_mod)
-        try:
-            with st.spinner(
-                "브라우저가 열립니다. Threads에 로그인하세요. 창을 닫으면 바로 취소됩니다..."
-            ):
-                save_session_mod.save_threads_session(threads_session, wait_enter=False)
-            st.success("Threads 계정을 연결했습니다.")
-            st.rerun()
-        except save_session_mod.LoginCancelled as exc:
-            st.warning(str(exc))
-        except Exception as exc:
-            st.error(f"브라우저 로그인에 실패했습니다: {exc}")
-            st.info("창이 안 뜨면 Chrome 또는 Edge가 설치돼 있는지 확인한 뒤 **연결 방법 보기**를 눌러 주세요.")
+with st.form("threads_api_connect"):
+    token_input = st.text_input(
+        "Access Token",
+        type="password",
+        help="Meta 개발자 앱에서 발급한 Threads 사용자 토큰",
+    )
+    user_id_input = st.text_input(
+        "Threads User ID (비우면 토큰으로 자동 조회)",
+        value=str(saved_creds.get("user_id") or ""),
+    )
+    save_clicked = st.form_submit_button("토큰 확인 & 저장", type="primary", use_container_width=True)
+
+if save_clicked:
+    try:
+        if not (token_input or "").strip():
+            raise ValueError("Access Token을 입력하세요.")
+        profile = verify_token(token_input.strip())
+        user_id = (user_id_input or "").strip() or str(profile.get("id") or "")
+        if not user_id:
+            raise ValueError("User ID를 확인하지 못했습니다.")
+        save_credentials(
+            token_input.strip(),
+            user_id,
+            username=current_user.username,
+            threads_username=str(profile.get("username") or ""),
+        )
+        st.success(f"연결되었습니다. @{profile.get('username') or user_id}")
+        st.rerun()
+    except Exception as exc:
+        st.error(f"토큰 연결 실패: {exc}")
+
+if threads_ok and st.button("Threads API 연결 해제", use_container_width=True):
+    clear_credentials(current_user.username)
+    st.rerun()
 
 st.divider()
 st.subheader("✍️ 스레드 초안 실시간 생성 & 프리뷰")
-st.caption("초안을 뽑으면 텔레그램으로 검토 알림이 갑니다. 승인 버튼을 누르려면 `python main.py schedule`이 켜져 있어야 합니다.")
+st.caption("초안을 뽑으면 텔레그램으로 검토 알림이 갑니다. 승인 버튼을 쓰려면 `python main.py schedule`을 클라우드/서버에서 켜 두세요 (브라우저 불필요).")
 
 if st.button("새로운 스레드 초안 뽑기", use_container_width=True):
     spinner = (
@@ -649,11 +642,11 @@ with sched_left:
     )
     if st.session_state.get("sched_mode") == "auto":
         st.warning(
-            "승인 없이 Threads에 바로 올립니다. 세션이 살아 있어야 하고, "
+            "승인 없이 Threads에 바로 올립니다. API 토큰이 연결되어 있어야 하고, "
             "초안을 텔레그램에서 고칠 기회는 없습니다."
         )
         if not threads_ok:
-            st.error("위에서 Threads 계정을 먼저 연결하세요.")
+            st.error("위에서 Threads API 토큰을 먼저 연결하세요.")
 
     st.multiselect(
         "요일",
